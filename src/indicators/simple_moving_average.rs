@@ -28,6 +28,10 @@ impl SimpleMovingAverage {
         })
     }
 
+    pub fn get_internal_state(&self) -> (Duration, VecDeque<(DateTime<Utc>, f64)>, f64) {
+        (self.duration, self.window.clone(), self.sum)
+    }
+
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
         while self
             .window
