@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use crate::errors::Result;
+use crate::indicators::AdaptiveTimeDetector;
 use crate::{Next, Reset};
 use chrono::{DateTime, Duration, Utc};
 #[cfg(feature = "serde")]
@@ -15,6 +16,7 @@ pub struct StandardDeviation {
     window: VecDeque<(DateTime<Utc>, f64)>,
     sum: f64,
     sum_sq: f64,
+    detector: AdaptiveTimeDetector,
 }
 
 impl StandardDeviation {
@@ -27,6 +29,7 @@ impl StandardDeviation {
             window: VecDeque::new(),
             sum: 0.0,
             sum_sq: 0.0,
+            detector: AdaptiveTimeDetector::new(),
         })
     }
 
@@ -59,8 +62,19 @@ impl Next<f64> for StandardDeviation {
     fn next(&mut self, input: (DateTime<Utc>, f64)) -> Self::Output {
         let (timestamp, value) = input;
 
-        // Remove old values from the window
-        self.remove_old_data(timestamp);
+        // Check if we should replace the last value (same time bucket)
+        let should_replace = self.detector.should_replace(timestamp);
+        
+        if should_replace && !self.window.is_empty() {
+            // Replace the last value in the same time bucket
+            if let Some((_, old_value)) = self.window.pop_back() {
+                self.sum -= old_value;
+                self.sum_sq -= old_value * old_value;
+            }
+        } else {
+            // New time period - remove old data first
+            self.remove_old_data(timestamp);
+        }
 
         // Add new value to the window
         self.window.push_back((timestamp, value));
@@ -84,6 +98,7 @@ impl Reset for StandardDeviation {
         self.window.clear();
         self.sum = 0.0;
         self.sum_sq = 0.0;
+        self.detector.reset();
     }
 }
 

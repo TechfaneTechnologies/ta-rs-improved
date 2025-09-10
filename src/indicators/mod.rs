@@ -30,3 +30,6 @@ pub use self::bollinger_bands::{BollingerBands, BollingerBandsOutput};
 
 mod rate_of_change;
 pub use self::rate_of_change::RateOfChange;
+
+mod adaptive;
+pub use self::adaptive::{AdaptiveTimeDetector, DetectedFrequency};

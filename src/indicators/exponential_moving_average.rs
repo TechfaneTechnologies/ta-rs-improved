@@ -1,6 +1,7 @@
 use std::fmt;
 
 use crate::errors::{Result, TaError};
+use crate::indicators::AdaptiveTimeDetector;
 use crate::{Next, Reset};
 use chrono::{DateTime, Duration, Utc};
 #[cfg(feature = "serde")]
@@ -16,6 +17,8 @@ pub struct ExponentialMovingAverage {
     window: VecDeque<(DateTime<Utc>, f64)>,
     current: f64,
     is_new: bool,
+    detector: AdaptiveTimeDetector,
+    last_value: f64,
 }
 
 impl ExponentialMovingAverage {
@@ -29,18 +32,26 @@ impl ExponentialMovingAverage {
                 window: VecDeque::new(),
                 current: 0.0,
                 is_new: true,
+                detector: AdaptiveTimeDetector::new(),
+                last_value: 0.0,
             })
         }
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        while self
-            .window
-            .front()
-            .map_or(false, |(time, _)| *time <= current_time - self.duration)
-        {
-            self.window.pop_front();
-        }
+        // EMA doesn't actually need to remove old data
+        // It's a running average that only depends on the current state
+        // Keeping the window for potential debugging, but not removing data
+        // This was causing issues with RSI calculations
+        
+        // Original code commented out:
+        // while self
+        //     .window
+        //     .front()
+        //     .map_or(false, |(time, _)| *time <= current_time - self.duration)
+        // {
+        //     self.window.pop_front();
+        // }
     }
 }
 
@@ -48,16 +59,33 @@ impl Next<f64> for ExponentialMovingAverage {
     type Output = f64;
 
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
-        self.remove_old_data(timestamp);
-        self.window.push_back((timestamp, value));
-
-        if self.is_new {
-            self.is_new = false;
-            self.current = value;
+        // Check if we should replace the last value (same time bucket)
+        let should_replace = self.detector.should_replace(timestamp);
+        
+        if should_replace && !self.is_new {
+            // Reverse the previous EMA calculation and apply new value
+            // Previous: current = k * last_value + (1-k) * old_current
+            // Solve for old_current: old_current = (current - k * last_value) / (1-k)
+            let old_current = if (1.0 - self.k) != 0.0 {
+                (self.current - self.k * self.last_value) / (1.0 - self.k)
+            } else {
+                self.current
+            };
+            self.current = (self.k * value) + ((1.0 - self.k) * old_current);
         } else {
-            // The weight should be constant and equal to `k`
-            self.current = (self.k * value) + ((1.0 - self.k) * self.current);
+            // New time period
+            // EMA doesn't need to maintain a window or remove old data
+            // It's a running average that only depends on current state
+            
+            if self.is_new {
+                self.is_new = false;
+                self.current = value;
+            } else {
+                self.current = (self.k * value) + ((1.0 - self.k) * self.current);
+            }
         }
+        
+        self.last_value = value;
         self.current
     }
 }
@@ -67,6 +95,8 @@ impl Reset for ExponentialMovingAverage {
         self.window.clear();
         self.current = 0.0;
         self.is_new = true;
+        self.detector.reset();
+        self.last_value = 0.0;
     }
 }
 

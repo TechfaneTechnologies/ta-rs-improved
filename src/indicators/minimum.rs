@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use crate::errors::Result;
+use crate::indicators::AdaptiveTimeDetector;
 use crate::{Next, Reset};
 use chrono::{DateTime, Duration, Utc};
 #[cfg(feature = "serde")]
@@ -13,6 +14,7 @@ pub struct Minimum {
     duration: Duration,
     window: VecDeque<(DateTime<Utc>, f64)>,
     min_value: f64,
+    detector: AdaptiveTimeDetector,
 }
 
 impl Minimum {
@@ -24,6 +26,7 @@ impl Minimum {
             duration,
             window: VecDeque::new(),
             min_value: f64::INFINITY,
+            detector: AdaptiveTimeDetector::new(),
         })
     }
 
@@ -50,7 +53,17 @@ impl Next<f64> for Minimum {
     type Output = f64;
 
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
-        self.remove_old(timestamp);
+        // Check if we should replace the last value (same time bucket)
+        let should_replace = self.detector.should_replace(timestamp);
+        
+        if should_replace && !self.window.is_empty() {
+            // Replace the last value in the same time bucket
+            self.window.pop_back();
+        } else {
+            // New time period - remove old data first
+            self.remove_old(timestamp);
+        }
+        
         self.window.push_back((timestamp, value));
 
         if value < self.min_value {
@@ -67,6 +80,7 @@ impl Reset for Minimum {
     fn reset(&mut self) {
         self.window.clear();
         self.min_value = f64::INFINITY;
+        self.detector.reset();
     }
 }
 

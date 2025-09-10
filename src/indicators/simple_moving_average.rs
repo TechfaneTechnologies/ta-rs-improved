@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 
+use crate::indicators::AdaptiveTimeDetector;
 use crate::Next;
 use crate::{errors::Result, Reset};
 use chrono::{DateTime, Duration, Utc};
@@ -14,6 +15,7 @@ pub struct SimpleMovingAverage {
     duration: Duration,
     window: VecDeque<(DateTime<Utc>, f64)>,
     sum: f64,
+    detector: AdaptiveTimeDetector,
 }
 
 impl SimpleMovingAverage {
@@ -25,6 +27,7 @@ impl SimpleMovingAverage {
             duration,
             window: VecDeque::new(),
             sum: 0.0,
+            detector: AdaptiveTimeDetector::new(),
         })
     }
 
@@ -49,8 +52,18 @@ impl Next<f64> for SimpleMovingAverage {
     type Output = f64;
 
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
-        // Remove old data points
-        self.remove_old_data(timestamp);
+        // Check if we should replace the last value (same time bucket)
+        let should_replace = self.detector.should_replace(timestamp);
+        
+        if should_replace && !self.window.is_empty() {
+            // Replace the last value in the same time bucket
+            if let Some((_, old_value)) = self.window.pop_back() {
+                self.sum -= old_value;
+            }
+        } else {
+            // New time period - remove old data first
+            self.remove_old_data(timestamp);
+        }
 
         // Add new data point
         self.window.push_back((timestamp, value));
@@ -69,6 +82,7 @@ impl Reset for SimpleMovingAverage {
     fn reset(&mut self) {
         self.window.clear();
         self.sum = 0.0;
+        self.detector.reset();
     }
 }
 

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use crate::errors::{Result, TaError};
+use crate::indicators::AdaptiveTimeDetector;
 use crate::{Next, Reset};
 use chrono::{DateTime, Duration, Utc};
 #[cfg(feature = "serde")]
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct MaxDrawup {
     duration: Duration,
     window: VecDeque<(DateTime<Utc>, f64)>,
+    detector: AdaptiveTimeDetector,
 }
 
 impl MaxDrawup {
@@ -22,6 +24,7 @@ impl MaxDrawup {
             Ok(Self {
                 duration,
                 window: VecDeque::new(),
+                detector: AdaptiveTimeDetector::new(),
             })
         }
     }
@@ -58,8 +61,16 @@ impl Next<f64> for MaxDrawup {
     type Output = f64;
 
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
-        // Remove data points that are older than our duration
-        self.remove_old_data(timestamp);
+        // Check if we should replace the last value (same time bucket)
+        let should_replace = self.detector.should_replace(timestamp);
+        
+        if should_replace && !self.window.is_empty() {
+            // Replace the last value in the same time bucket
+            self.window.pop_back();
+        } else {
+            // New time period - remove old data first
+            self.remove_old_data(timestamp);
+        }
 
         // Add the new data point
         self.window.push_back((timestamp, value));
@@ -72,6 +83,7 @@ impl Next<f64> for MaxDrawup {
 impl Reset for MaxDrawup {
     fn reset(&mut self) {
         self.window.clear();
+        self.detector.reset();
     }
 }
 
