@@ -61,7 +61,7 @@ impl AdaptiveTimeDetector {
         // Calculate average time delta between consecutive timestamps
         let mut total_delta_seconds = 0i64;
         let mut count = 0;
-        
+
         for i in 1..self.timestamp_history.len() {
             let delta = self.timestamp_history[i] - self.timestamp_history[i - 1];
             total_delta_seconds += delta.num_seconds();
@@ -124,7 +124,7 @@ impl AdaptiveTimeDetector {
         // Add to history for frequency detection
         if self.frequency == DetectedFrequency::Unknown {
             self.timestamp_history.push_back(timestamp);
-            
+
             // Try to detect frequency once we have enough samples
             if self.timestamp_history.len() >= self.detection_samples {
                 self.detect_frequency();
@@ -140,13 +140,13 @@ impl AdaptiveTimeDetector {
 
         // For Intraday: Apply bucket-based de-duplication
         let current_bucket = self.calculate_bucket(timestamp);
-        
+
         // Check if we're in the same bucket as last processed
         let should_replace = current_bucket == self.last_processed_bucket;
-        
+
         // Update last processed bucket
         self.last_processed_bucket = current_bucket;
-        
+
         should_replace
     }
 
@@ -178,42 +178,43 @@ mod tests {
     fn test_daily_detection() {
         let mut detector = AdaptiveTimeDetector::new();
         let base = Utc.ymd(2024, 1, 1).and_hms(9, 30, 0);
-        
+
         // Simulate daily OHLC data (9:30 AM and 4:00 PM)
         assert!(!detector.should_replace(base)); // First point
         assert!(!detector.should_replace(base + Duration::hours(6) + Duration::minutes(30))); // 4:00 PM same day
         assert!(!detector.should_replace(base + Duration::days(1))); // Next day 9:30 AM
-        
+
         // Frequency should now be detected as DailyOHLC
         assert_eq!(detector.frequency(), &DetectedFrequency::DailyOHLC);
-        
+
         // With de-duplication disabled, no values should be replaced
-        assert!(!detector.should_replace(base + Duration::days(1) + Duration::hours(6) + Duration::minutes(30)));
+        assert!(!detector
+            .should_replace(base + Duration::days(1) + Duration::hours(6) + Duration::minutes(30)));
     }
 
     #[test]
     fn test_intraday_detection() {
         let mut detector = AdaptiveTimeDetector::new();
         let base = Utc.ymd(2024, 1, 1).and_hms(9, 30, 0);
-        
+
         // Simulate 5-minute data
         assert!(!detector.should_replace(base));
         assert!(!detector.should_replace(base + Duration::minutes(5)));
         assert!(!detector.should_replace(base + Duration::minutes(10)));
-        
+
         // Should detect as 5-minute intraday
         assert!(matches!(
             detector.frequency(),
             DetectedFrequency::Intraday(d) if d.num_minutes() == 5
         ));
-        
+
         // Next 5-minute period should not replace
         assert!(!detector.should_replace(base + Duration::minutes(15)));
-        
+
         // Within same 5-minute bucket (minute 16 is in bucket 3, same as minute 15)
         // Actually wait, with 5-minute buckets:
         // - Minutes 0-4 are bucket 0
-        // - Minutes 5-9 are bucket 1  
+        // - Minutes 5-9 are bucket 1
         // - Minutes 10-14 are bucket 2
         // - Minutes 15-19 are bucket 3
         // So minute 16 IS in the same bucket as minute 15
@@ -224,14 +225,14 @@ mod tests {
     fn test_transition_from_daily_to_intraday() {
         let mut detector = AdaptiveTimeDetector::new();
         let base = Utc.ymd(2024, 1, 1).and_hms(9, 30, 0);
-        
+
         // Start with daily data
         detector.should_replace(base);
         detector.should_replace(base + Duration::hours(6) + Duration::minutes(30));
         detector.should_replace(base + Duration::days(1));
-        
+
         assert_eq!(detector.frequency(), &DetectedFrequency::DailyOHLC);
-        
+
         // Once detected as DailyOHLC, it never replaces values
         // Each Open and Close are separate valid data points
         assert!(!detector.should_replace(base + Duration::days(1) + Duration::minutes(1)));
@@ -242,13 +243,13 @@ mod tests {
     fn test_reset() {
         let mut detector = AdaptiveTimeDetector::new();
         let base = Utc.ymd(2024, 1, 1).and_hms(9, 30, 0);
-        
+
         // Detect daily frequency
         detector.should_replace(base);
         detector.should_replace(base + Duration::hours(7));
         detector.should_replace(base + Duration::days(1));
         assert!(detector.is_detected());
-        
+
         // Reset
         detector.reset();
         assert!(!detector.is_detected());
