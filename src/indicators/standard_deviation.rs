@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::time::Duration;
 
 use crate::errors::Result;
 use crate::indicators::AdaptiveTimeDetector;
 use crate::{Next, Reset};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct StandardDeviation {
-    duration: Duration,
+    duration: Duration, // Now std::time::Duration
     window: VecDeque<(DateTime<Utc>, f64)>,
     sum: f64,
     sum_sq: f64,
@@ -20,11 +21,12 @@ pub struct StandardDeviation {
 }
 
 impl StandardDeviation {
-     pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
+    pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
         self.window.clone()
     }
-pub fn new(duration: Duration) -> Result<Self> {
-        if duration.num_seconds() <= 0 {
+    pub fn new(duration: Duration) -> Result<Self> {
+        // std::time::Duration can't be negative, so just check if it's zero
+        if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
             return Err(crate::errors::TaError::InvalidParameter);
         }
         Ok(Self {
@@ -38,10 +40,12 @@ pub fn new(duration: Duration) -> Result<Self> {
 
     // Helper method to remove old data points
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
+        // Convert std::time::Duration to chrono::Duration for the subtraction
+        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
             .front()
-            .map_or(false, |(time, _)| *time <= current_time - self.duration)
+            .map_or(false, |(time, _)| *time <= current_time - chrono_duration)
         {
             if let Some((_, old_value)) = self.window.pop_front() {
                 self.sum -= old_value;
@@ -67,7 +71,7 @@ impl Next<f64> for StandardDeviation {
 
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
-        
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             if let Some((_, old_value)) = self.window.pop_back() {
@@ -107,13 +111,15 @@ impl Reset for StandardDeviation {
 
 impl Default for StandardDeviation {
     fn default() -> Self {
-        Self::new(Duration::days(14)).unwrap()
+        // Use std::time::Duration constructor
+        Self::new(Duration::from_secs(14 * 24 * 60 * 60)).unwrap() // 14 days in seconds
     }
 }
 
 impl fmt::Display for StandardDeviation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SD({:?})", self.duration)
+        // Use as_secs() instead of Debug format
+        write!(f, "SD({}s)", self.duration.as_secs())
     }
 }
 
@@ -122,38 +128,54 @@ mod tests {
     use crate::test_helper::round;
 
     use super::*;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
 
     #[test]
     fn test_new() {
-        assert!(StandardDeviation::new(Duration::seconds(0)).is_err());
-        assert!(StandardDeviation::new(Duration::seconds(1)).is_ok());
+        assert!(StandardDeviation::new(Duration::from_secs(0)).is_err());
+        assert!(StandardDeviation::new(Duration::from_secs(1)).is_ok());
     }
 
     #[test]
     fn test_next() {
-        let duration = Duration::seconds(4);
+        let duration = Duration::from_secs(4);
         let mut sd = StandardDeviation::new(duration).unwrap();
         let now = Utc::now();
-        assert_eq!(sd.next((now + Duration::seconds(1), 10.0)), 0.0);
-        assert_eq!(sd.next((now + Duration::seconds(2), 20.0)), 5.0);
-        assert_eq!(round(sd.next((now + Duration::seconds(3), 30.0))), 8.165);
-        assert_eq!(round(sd.next((now + Duration::seconds(4), 20.0))), 7.071);
-        assert_eq!(round(sd.next((now + Duration::seconds(5), 10.0))), 7.071);
-        assert_eq!(round(sd.next((now + Duration::seconds(6), 100.0))), 35.355);
+        // Use chrono::Duration for adding to DateTime
+        assert_eq!(sd.next((now + chrono::Duration::seconds(1), 10.0)), 0.0);
+        assert_eq!(sd.next((now + chrono::Duration::seconds(2), 20.0)), 5.0);
+        assert_eq!(
+            round(sd.next((now + chrono::Duration::seconds(3), 30.0))),
+            8.165
+        );
+        assert_eq!(
+            round(sd.next((now + chrono::Duration::seconds(4), 20.0))),
+            7.071
+        );
+        assert_eq!(
+            round(sd.next((now + chrono::Duration::seconds(5), 10.0))),
+            7.071
+        );
+        assert_eq!(
+            round(sd.next((now + chrono::Duration::seconds(6), 100.0))),
+            35.355
+        );
     }
 
     #[test]
     fn test_reset() {
-        let duration = Duration::seconds(4);
+        let duration = Duration::from_secs(4);
         let mut sd = StandardDeviation::new(duration).unwrap();
         let now = Utc::now();
         assert_eq!(sd.next((now, 10.0)), 0.0);
-        assert_eq!(sd.next((now + Duration::seconds(1), 20.0)), 5.0);
-        assert_eq!(round(sd.next((now + Duration::seconds(2), 30.0))), 8.165);
+        assert_eq!(sd.next((now + chrono::Duration::seconds(1), 20.0)), 5.0);
+        assert_eq!(
+            round(sd.next((now + chrono::Duration::seconds(2), 30.0))),
+            8.165
+        );
 
         sd.reset();
-        assert_eq!(sd.next((now + Duration::seconds(3), 20.0)), 0.0);
+        assert_eq!(sd.next((now + chrono::Duration::seconds(3), 20.0)), 0.0);
     }
 
     #[test]
@@ -163,8 +185,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let duration = Duration::seconds(5);
-        let sd = StandardDeviation::new(duration).unwrap();
-        assert_eq!(format!("{}", sd), format!("SD({:?})", duration));
+        let indicator = StandardDeviation::new(Duration::from_secs(7)).unwrap();
+        assert_eq!(format!("{}", indicator), "SD(7s)");
     }
 }

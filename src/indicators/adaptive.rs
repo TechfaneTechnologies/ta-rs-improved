@@ -1,5 +1,6 @@
-use chrono::{DateTime, Datelike, Duration, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use std::collections::VecDeque;
+use std::time::Duration; // Change: Use std::time::Duration
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ pub enum DetectedFrequency {
     /// Determined to be daily OHLC data (no de-duplication needed)
     DailyOHLC,
     /// Determined to be intraday data with specific bucket size for de-duplication
-    Intraday(Duration),
+    Intraday(Duration), // Now std::time::Duration
 }
 
 /// Handles adaptive time detection and de-duplication logic for indicators
@@ -72,27 +73,30 @@ impl AdaptiveTimeDetector {
             return;
         }
 
-        let avg_delta = Duration::seconds(total_delta_seconds / count as i64);
+        let avg_delta_seconds = total_delta_seconds / count as i64;
+        let avg_delta = Duration::from_secs(avg_delta_seconds as u64);
 
         // Apply heuristics to distinguish data patterns
-        if avg_delta > Duration::hours(4) {
+        if avg_delta > Duration::from_secs(4 * 3600) {
+            // 4 hours
             // Data points are more than 4 hours apart - likely daily OHLC
-            // For daily OHLC, we do NOT want de-duplication
             self.frequency = DetectedFrequency::DailyOHLC;
-        } else if avg_delta < Duration::seconds(30) {
+        } else if avg_delta < Duration::from_secs(30) {
             // Data points are less than 30 seconds apart - likely test data or tick data
-            // Treat each point as unique (no de-duplication)
-            self.frequency = DetectedFrequency::Intraday(Duration::seconds(1));
+            self.frequency = DetectedFrequency::Intraday(Duration::from_secs(1));
         } else {
             // Intraday data - round to sensible bucket sizes
-            let bucket_duration = if avg_delta < Duration::minutes(2) {
-                Duration::minutes(1) // 1-minute buckets for sub-2-minute data
-            } else if avg_delta < Duration::minutes(10) {
-                Duration::minutes(5) // 5-minute buckets
-            } else if avg_delta < Duration::minutes(30) {
-                Duration::minutes(15) // 15-minute buckets
+            let bucket_duration = if avg_delta < Duration::from_secs(2 * 60) {
+                // 2 minutes
+                Duration::from_secs(60) // 1-minute buckets
+            } else if avg_delta < Duration::from_secs(10 * 60) {
+                // 10 minutes
+                Duration::from_secs(5 * 60) // 5-minute buckets
+            } else if avg_delta < Duration::from_secs(30 * 60) {
+                // 30 minutes
+                Duration::from_secs(15 * 60) // 15-minute buckets
             } else {
-                Duration::hours(1) // Hourly buckets for larger intervals
+                Duration::from_secs(3600) // Hourly buckets
             };
             self.frequency = DetectedFrequency::Intraday(bucket_duration);
         }
@@ -103,12 +107,11 @@ impl AdaptiveTimeDetector {
         match &self.frequency {
             DetectedFrequency::DailyOHLC => {
                 // For daily OHLC, each timestamp is unique (no bucketing)
-                // Open and Close are separate data points
                 timestamp.timestamp()
             }
             DetectedFrequency::Intraday(bucket_size) => {
                 // Divide timestamp by bucket size to group into intervals
-                timestamp.timestamp() / bucket_size.num_seconds()
+                timestamp.timestamp() / bucket_size.as_secs() as i64
             }
             DetectedFrequency::Unknown => {
                 // Each timestamp is unique until we detect frequency
@@ -181,15 +184,19 @@ mod tests {
 
         // Simulate daily OHLC data (9:30 AM and 4:00 PM)
         assert!(!detector.should_replace(base)); // First point
-        assert!(!detector.should_replace(base + Duration::hours(6) + Duration::minutes(30))); // 4:00 PM same day
-        assert!(!detector.should_replace(base + Duration::days(1))); // Next day 9:30 AM
+        assert!(!detector
+            .should_replace(base + chrono::Duration::hours(6) + chrono::Duration::minutes(30)));
+        assert!(!detector.should_replace(base + chrono::Duration::days(1)));
 
         // Frequency should now be detected as DailyOHLC
         assert_eq!(detector.frequency(), &DetectedFrequency::DailyOHLC);
 
         // With de-duplication disabled, no values should be replaced
-        assert!(!detector
-            .should_replace(base + Duration::days(1) + Duration::hours(6) + Duration::minutes(30)));
+        assert!(!detector.should_replace(
+            base + chrono::Duration::days(1)
+                + chrono::Duration::hours(6)
+                + chrono::Duration::minutes(30)
+        ));
     }
 
     #[test]
@@ -199,26 +206,20 @@ mod tests {
 
         // Simulate 5-minute data
         assert!(!detector.should_replace(base));
-        assert!(!detector.should_replace(base + Duration::minutes(5)));
-        assert!(!detector.should_replace(base + Duration::minutes(10)));
+        assert!(!detector.should_replace(base + chrono::Duration::minutes(5)));
+        assert!(!detector.should_replace(base + chrono::Duration::minutes(10)));
 
         // Should detect as 5-minute intraday
         assert!(matches!(
             detector.frequency(),
-            DetectedFrequency::Intraday(d) if d.num_minutes() == 5
+            DetectedFrequency::Intraday(d) if d.as_secs() == 5 * 60
         ));
 
         // Next 5-minute period should not replace
-        assert!(!detector.should_replace(base + Duration::minutes(15)));
+        assert!(!detector.should_replace(base + chrono::Duration::minutes(15)));
 
-        // Within same 5-minute bucket (minute 16 is in bucket 3, same as minute 15)
-        // Actually wait, with 5-minute buckets:
-        // - Minutes 0-4 are bucket 0
-        // - Minutes 5-9 are bucket 1
-        // - Minutes 10-14 are bucket 2
-        // - Minutes 15-19 are bucket 3
-        // So minute 16 IS in the same bucket as minute 15
-        assert!(detector.should_replace(base + Duration::minutes(16)));
+        // Within same 5-minute bucket
+        assert!(detector.should_replace(base + chrono::Duration::minutes(16)));
     }
 
     #[test]
@@ -228,15 +229,16 @@ mod tests {
 
         // Start with daily data
         detector.should_replace(base);
-        detector.should_replace(base + Duration::hours(6) + Duration::minutes(30));
-        detector.should_replace(base + Duration::days(1));
+        detector.should_replace(base + chrono::Duration::hours(6) + chrono::Duration::minutes(30));
+        detector.should_replace(base + chrono::Duration::days(1));
 
         assert_eq!(detector.frequency(), &DetectedFrequency::DailyOHLC);
 
         // Once detected as DailyOHLC, it never replaces values
-        // Each Open and Close are separate valid data points
-        assert!(!detector.should_replace(base + Duration::days(1) + Duration::minutes(1)));
-        assert!(!detector.should_replace(base + Duration::days(1) + Duration::minutes(2)));
+        assert!(!detector
+            .should_replace(base + chrono::Duration::days(1) + chrono::Duration::minutes(1)));
+        assert!(!detector
+            .should_replace(base + chrono::Duration::days(1) + chrono::Duration::minutes(2)));
     }
 
     #[test]
@@ -246,8 +248,8 @@ mod tests {
 
         // Detect daily frequency
         detector.should_replace(base);
-        detector.should_replace(base + Duration::hours(7));
-        detector.should_replace(base + Duration::days(1));
+        detector.should_replace(base + chrono::Duration::hours(7));
+        detector.should_replace(base + chrono::Duration::days(1));
         assert!(detector.is_detected());
 
         // Reset

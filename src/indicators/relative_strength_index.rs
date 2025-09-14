@@ -1,9 +1,10 @@
 use std::fmt;
+use std::time::Duration;
 
 use crate::errors::Result;
 use crate::indicators::ExponentialMovingAverage as Ema;
 use crate::{Next, Reset};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct RelativeStrengthIndex {
     period: usize,
-    period_duration: Duration,
+    period_duration: Duration, // Now std::time::Duration
     up_ema_indicator: Ema,
     down_ema_indicator: Ema,
     prev_val: Option<f64>,
@@ -29,7 +30,7 @@ impl RelativeStrengthIndex {
     /// # Example
     /// ```
     /// // 14-day RSI that correctly handles any frequency data
-    /// let rsi = RelativeStrengthIndex::new(14, Duration::days(1))?;
+    /// let rsi = RelativeStrengthIndex::new(14, Duration::from_secs(86400))?;  // 1 day
     /// ```
     pub fn new(period: usize, period_duration: Duration) -> Result<Self> {
         Ok(Self {
@@ -46,7 +47,7 @@ impl RelativeStrengthIndex {
     /// This is for backward compatibility
     pub fn new_period_based(period: usize) -> Result<Self> {
         // Default to daily periods for backward compatibility
-        Self::new(period, Duration::days(1))
+        Self::new(period, Duration::from_secs(86400)) // 1 day
     }
 
     /// Calculate gain and loss, properly scaled by time elapsed
@@ -65,7 +66,7 @@ impl RelativeStrengthIndex {
             // Scale the gain/loss by time elapsed relative to period duration
             // This ensures consistent gain/loss measurement regardless of data frequency
             let time_factor =
-                time_elapsed.num_seconds() as f64 / self.period_duration.num_seconds() as f64;
+                time_elapsed.num_seconds() as f64 / self.period_duration.as_secs() as f64;
 
             // Apply time scaling to normalize the gain/loss
             // For example, if we're using daily RSI but get hourly data,
@@ -136,40 +137,21 @@ impl Reset for RelativeStrengthIndex {
 impl Default for RelativeStrengthIndex {
     fn default() -> Self {
         // 14-day RSI by default
-        Self::new(14, Duration::days(1)).unwrap()
+        Self::new(14, Duration::from_secs(86400)).unwrap() // 1 day
     }
 }
 
 impl fmt::Display for RelativeStrengthIndex {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.period_duration.num_days() > 0 {
-            write!(
-                f,
-                "RSI({} x {} days)",
-                self.period,
-                self.period_duration.num_days()
-            )
-        } else if self.period_duration.num_hours() > 0 {
-            write!(
-                f,
-                "RSI({} x {} hours)",
-                self.period,
-                self.period_duration.num_hours()
-            )
-        } else if self.period_duration.num_minutes() > 0 {
-            write!(
-                f,
-                "RSI({} x {} min)",
-                self.period,
-                self.period_duration.num_minutes()
-            )
+        let secs = self.period_duration.as_secs();
+        if secs >= 86400 && secs % 86400 == 0 {
+            write!(f, "RSI({} x {} days)", self.period, secs / 86400)
+        } else if secs >= 3600 && secs % 3600 == 0 {
+            write!(f, "RSI({} x {} hours)", self.period, secs / 3600)
+        } else if secs >= 60 && secs % 60 == 0 {
+            write!(f, "RSI({} x {} min)", self.period, secs / 60)
         } else {
-            write!(
-                f,
-                "RSI({} x {} sec)",
-                self.period,
-                self.period_duration.num_seconds()
-            )
+            write!(f, "RSI({} x {} sec)", self.period, secs)
         }
     }
 }
@@ -178,54 +160,56 @@ impl fmt::Display for RelativeStrengthIndex {
 mod tests {
     use super::*;
     use crate::test_helper::*;
-    use chrono::{Duration, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
 
     test_indicator!(RelativeStrengthIndex);
 
     #[test]
     fn test_new() {
-        assert!(RelativeStrengthIndex::new(0, Duration::days(1)).is_err());
-        assert!(RelativeStrengthIndex::new(1, Duration::days(0)).is_err());
-        assert!(RelativeStrengthIndex::new(14, Duration::days(1)).is_ok());
+        assert!(RelativeStrengthIndex::new(0, Duration::from_secs(86400)).is_err());
+        assert!(RelativeStrengthIndex::new(1, Duration::from_secs(0)).is_err());
+        assert!(RelativeStrengthIndex::new(14, Duration::from_secs(86400)).is_ok());
     }
 
     #[test]
     fn test_daily_rsi() {
         // 3-period daily RSI with daily data
-        let mut rsi = RelativeStrengthIndex::new(3, Duration::days(1)).unwrap();
+        let mut rsi = RelativeStrengthIndex::new(3, Duration::from_secs(86400)).unwrap();
         let timestamp = Utc.ymd(2020, 1, 1).and_hms(0, 0, 0);
 
         // First value: no previous, RSI = 50
         assert_eq!(rsi.next((timestamp, 10.0)), 50.0);
 
         // One day later: gain of 0.5
-        let rsi_val = rsi.next((timestamp + Duration::days(1), 10.5));
+        let rsi_val = rsi.next((timestamp + chrono::Duration::days(1), 10.5));
         assert_eq!(rsi_val, 100.0); // Only gains
 
         // Another day: loss of 0.5
-        let rsi_val = rsi.next((timestamp + Duration::days(2), 10.0)).round();
+        let rsi_val = rsi
+            .next((timestamp + chrono::Duration::days(2), 10.0))
+            .round();
         assert_eq!(rsi_val, 33.0); // Mix of gains and losses
     }
 
     #[test]
     fn test_mixed_frequency_rsi() {
         // 14-day RSI receiving mixed frequency data
-        let mut rsi = RelativeStrengthIndex::new(14, Duration::days(1)).unwrap();
+        let mut rsi = RelativeStrengthIndex::new(14, Duration::from_secs(86400)).unwrap();
         let timestamp = Utc.ymd(2020, 1, 1).and_hms(0, 0, 0);
 
         // Initialize with daily data
         rsi.next((timestamp, 100.0));
-        rsi.next((timestamp + Duration::days(1), 105.0)); // +5 in one day
+        rsi.next((timestamp + chrono::Duration::days(1), 105.0)); // +5 in one day
 
         // Now switch to hourly data
-        let initial_rsi = rsi.next((timestamp + Duration::days(2), 103.0)); // -2 in one day
+        let initial_rsi = rsi.next((timestamp + chrono::Duration::days(2), 103.0)); // -2 in one day
 
         // Feed hourly data with small changes
         let mut hourly_rsi = initial_rsi;
         for i in 1..=24 {
             // Small hourly increases
             hourly_rsi = rsi.next((
-                timestamp + Duration::days(2) + Duration::hours(i),
+                timestamp + chrono::Duration::days(2) + chrono::Duration::hours(i),
                 103.0 + (i as f64 * 0.1), // Total change of 2.4 over 24 hours
             ));
         }
@@ -239,21 +223,24 @@ mod tests {
     #[test]
     fn test_minute_data_stability() {
         // 14-day RSI should be stable even with minute data
-        let mut rsi = RelativeStrengthIndex::new(14, Duration::days(1)).unwrap();
+        let mut rsi = RelativeStrengthIndex::new(14, Duration::from_secs(86400)).unwrap();
         let timestamp = Utc.ymd(2020, 1, 1).and_hms(9, 30, 0);
 
         // Warm up with some daily data
         rsi.next((timestamp, 100.0));
         let mut daily_rsi = 50.0;
         for i in 1..14 {
-            daily_rsi = rsi.next((timestamp + Duration::days(i), 100.0 + (i as f64 * 0.5)));
+            daily_rsi = rsi.next((
+                timestamp + chrono::Duration::days(i),
+                100.0 + (i as f64 * 0.5),
+            ));
         }
 
         // Now feed minute data for an hour with tiny fluctuations
         let mut after_hour_rsi = daily_rsi;
         for i in 1..=60 {
             after_hour_rsi = rsi.next((
-                timestamp + Duration::days(14) + Duration::minutes(i),
+                timestamp + chrono::Duration::days(14) + chrono::Duration::minutes(i),
                 107.0 + ((i % 3) as f64 * 0.01), // Tiny oscillations
             ));
         }
@@ -264,19 +251,19 @@ mod tests {
 
     #[test]
     fn test_same_timestamp_replacement() {
-        let mut rsi = RelativeStrengthIndex::new(5, Duration::hours(1)).unwrap();
+        let mut rsi = RelativeStrengthIndex::new(5, Duration::from_secs(3600)).unwrap();
         let timestamp = Utc.ymd(2020, 1, 1).and_hms(0, 0, 0);
 
         // Initial values
         rsi.next((timestamp, 100.0));
 
         // Next period with gain
-        let rsi_val1 = rsi.next((timestamp + Duration::hours(1), 105.0));
+        let rsi_val1 = rsi.next((timestamp + chrono::Duration::hours(1), 105.0));
         println!("RSI after gain to 105: {}", rsi_val1);
         assert!(rsi_val1 > 50.0);
 
         // Replace same timestamp with different value (smaller gain)
-        let rsi_val2 = rsi.next((timestamp + Duration::hours(1), 102.0));
+        let rsi_val2 = rsi.next((timestamp + chrono::Duration::hours(1), 102.0));
         println!("RSI after replacement with 102: {}", rsi_val2);
 
         // Values should be different
@@ -294,11 +281,11 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let mut rsi = RelativeStrengthIndex::new(3, Duration::days(1)).unwrap();
+        let mut rsi = RelativeStrengthIndex::new(3, Duration::from_secs(86400)).unwrap();
         let timestamp = Utc.ymd(2020, 1, 1).and_hms(0, 0, 0);
 
         rsi.next((timestamp, 10.0));
-        rsi.next((timestamp + Duration::days(1), 10.5));
+        rsi.next((timestamp + chrono::Duration::days(1), 10.5));
 
         rsi.reset();
 
@@ -308,10 +295,10 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let rsi1 = RelativeStrengthIndex::new(14, Duration::days(1)).unwrap();
+        let rsi1 = RelativeStrengthIndex::new(14, Duration::from_secs(86400)).unwrap();
         assert_eq!(format!("{}", rsi1), "RSI(14 x 1 days)");
 
-        let rsi2 = RelativeStrengthIndex::new(20, Duration::hours(4)).unwrap();
+        let rsi2 = RelativeStrengthIndex::new(20, Duration::from_secs(4 * 3600)).unwrap();
         assert_eq!(format!("{}", rsi2), "RSI(20 x 4 hours)");
     }
 }

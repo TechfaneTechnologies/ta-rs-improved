@@ -1,6 +1,7 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
 use std::fmt;
+use std::time::Duration;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -12,18 +13,19 @@ use crate::{Next, Reset};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct MeanAbsoluteDeviation {
-    duration: Duration,
+    duration: Duration, // Now std::time::Duration
     sum: f64,
     window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
 }
 
 impl MeanAbsoluteDeviation {
-     pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
+    pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
         self.window.clone()
     }
-pub fn new(duration: Duration) -> Result<Self> {
-        if duration.num_seconds() <= 0 {
+    pub fn new(duration: Duration) -> Result<Self> {
+        // std::time::Duration can't be negative, so just check if it's zero
+        if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
             Err(TaError::InvalidParameter)
         } else {
             Ok(Self {
@@ -36,10 +38,12 @@ pub fn new(duration: Duration) -> Result<Self> {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
+        // Convert std::time::Duration to chrono::Duration for the subtraction
+        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
             .front()
-            .map_or(false, |(time, _)| *time <= current_time - self.duration)
+            .map_or(false, |(time, _)| *time <= current_time - chrono_duration)
         {
             if let Some((_, value)) = self.window.pop_front() {
                 self.sum -= value;
@@ -54,7 +58,7 @@ impl Next<f64> for MeanAbsoluteDeviation {
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
-        
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             if let Some((_, old_value)) = self.window.pop_back() {
@@ -93,13 +97,15 @@ impl Reset for MeanAbsoluteDeviation {
 
 impl Default for MeanAbsoluteDeviation {
     fn default() -> Self {
-        Self::new(Duration::days(14)).unwrap()
+        // Use std::time::Duration constructor
+        Self::new(Duration::from_secs(14 * 24 * 60 * 60)).unwrap() // 14 days in seconds
     }
 }
 
 impl fmt::Display for MeanAbsoluteDeviation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MAD({:?})", self.duration)
+        // Use as_secs() instead of Debug format
+        write!(f, "MAD({}s)", self.duration.as_secs())
     }
 }
 
@@ -116,13 +122,13 @@ mod tests {
 
     #[test]
     fn test_new() {
-        assert!(MeanAbsoluteDeviation::new(Duration::seconds(0)).is_err());
-        assert!(MeanAbsoluteDeviation::new(Duration::seconds(1)).is_ok());
+        assert!(MeanAbsoluteDeviation::new(Duration::from_secs(0)).is_err());
+        assert!(MeanAbsoluteDeviation::new(Duration::from_secs(1)).is_ok());
     }
 
     #[test]
     fn test_next() {
-        let duration = Duration::seconds(5);
+        let duration = Duration::from_secs(5);
         let mut mad = MeanAbsoluteDeviation::new(duration).unwrap();
 
         let timestamp1 = to_utc_datetime(0);
@@ -142,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let duration = Duration::seconds(5);
+        let duration = Duration::from_secs(5);
         let mut mad = MeanAbsoluteDeviation::new(duration).unwrap();
 
         let timestamp1 = to_utc_datetime(0);
@@ -164,8 +170,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let duration = Duration::seconds(10);
-        let indicator = MeanAbsoluteDeviation::new(duration).unwrap();
-        assert_eq!(format!("{}", indicator), format!("MAD({:?})", duration));
+        let indicator = MeanAbsoluteDeviation::new(Duration::from_secs(10)).unwrap();
+        assert_eq!(format!("{}", indicator), "MAD(10s)");
     }
 }

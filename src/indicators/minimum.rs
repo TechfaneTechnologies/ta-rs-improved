@@ -1,28 +1,31 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::time::Duration; // Change: Use std::time::Duration
 
 use crate::errors::Result;
 use crate::indicators::AdaptiveTimeDetector;
 use crate::{Next, Reset};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct Minimum {
-    duration: Duration,
+    duration: Duration, // Now std::time::Duration
     window: VecDeque<(DateTime<Utc>, f64)>,
     min_value: f64,
     detector: AdaptiveTimeDetector,
 }
 
 impl Minimum {
-     pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
+    pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
         self.window.clone()
     }
-pub fn new(duration: Duration) -> Result<Self> {
-        if duration.num_seconds() <= 0 {
+
+    pub fn new(duration: Duration) -> Result<Self> {
+        // Change: Check for zero duration (std::time::Duration can't be negative)
+        if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
             return Err(crate::errors::TaError::InvalidParameter);
         }
         Ok(Self {
@@ -42,10 +45,12 @@ pub fn new(duration: Duration) -> Result<Self> {
     }
 
     fn remove_old(&mut self, current_time: DateTime<Utc>) {
+        // Change: Convert std::time::Duration to chrono::Duration for date arithmetic
+        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
             .front()
-            .map_or(false, |&(time, _)| time < current_time - self.duration)
+            .map_or(false, |&(time, _)| time < current_time - chrono_duration)
         {
             self.window.pop_front();
         }
@@ -58,7 +63,7 @@ impl Next<f64> for Minimum {
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
-        
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             self.window.pop_back();
@@ -66,7 +71,7 @@ impl Next<f64> for Minimum {
             // New time period - remove old data first
             self.remove_old(timestamp);
         }
-        
+
         self.window.push_back((timestamp, value));
 
         if value < self.min_value {
@@ -89,13 +94,16 @@ impl Reset for Minimum {
 
 impl Default for Minimum {
     fn default() -> Self {
-        Self::new(Duration::days(14)).unwrap()
+        // Change: Use Duration::from_secs for 14 days
+        Self::new(Duration::from_secs(14 * 24 * 60 * 60)).unwrap()
     }
 }
 
 impl fmt::Display for Minimum {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MIN({:?} days)", self.duration.num_days())
+        // Change: Calculate days from seconds
+        let days = self.duration.as_secs() / 86400;
+        write!(f, "MIN({} days)", days)
     }
 }
 
@@ -111,13 +119,14 @@ mod tests {
 
     #[test]
     fn test_new() {
-        assert!(Minimum::new(Duration::days(0)).is_err());
-        assert!(Minimum::new(Duration::days(1)).is_ok());
+        // Change: Use std::time::Duration constructors
+        assert!(Minimum::new(Duration::from_secs(0)).is_err());
+        assert!(Minimum::new(Duration::from_secs(86400)).is_ok()); // 1 day
     }
 
     #[test]
     fn test_next() {
-        let duration = Duration::days(2);
+        let duration = Duration::from_secs(2 * 86400); // 2 days
         let mut min = Minimum::new(duration).unwrap();
 
         assert_eq!(min.next((datetime("2023-01-01 00:00:00"), 4.0)), 4.0);
@@ -134,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let duration = Duration::days(10);
+        let duration = Duration::from_secs(10 * 86400); // 10 days
         let mut min = Minimum::new(duration).unwrap();
 
         assert_eq!(min.next((datetime("2023-01-01 00:00:00"), 5.0)), 5.0);
@@ -151,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let indicator = Minimum::new(Duration::days(10)).unwrap();
+        let indicator = Minimum::new(Duration::from_secs(10 * 86400)).unwrap(); // 10 days
         assert_eq!(format!("{}", indicator), "MIN(10 days)");
     }
 }

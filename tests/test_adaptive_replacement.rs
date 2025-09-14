@@ -1,11 +1,12 @@
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
+use std::time::Duration; // Add this import for std::time::Duration
 use ta::indicators::{ExponentialMovingAverage, SimpleMovingAverage, StandardDeviation};
 use ta::Next;
 
 #[test]
 fn test_daily_ohlc_no_replacement() {
     // Test that daily OHLC data (Open and Close) are NOT replaced
-    let mut sma = SimpleMovingAverage::new(Duration::days(3)).unwrap();
+    let mut sma = SimpleMovingAverage::new(Duration::from_secs(3 * 86400)).unwrap(); // 3 days
 
     // Day 1: Open at 9:30 AM
     let day1_open = Utc.with_ymd_and_hms(2024, 1, 1, 9, 30, 0).unwrap();
@@ -33,7 +34,7 @@ fn test_daily_ohlc_no_replacement() {
 #[test]
 fn test_intraday_replacement_within_bucket() {
     // Test that intraday data within the same time bucket DOES get replaced
-    let mut sma = SimpleMovingAverage::new(Duration::minutes(15)).unwrap();
+    let mut sma = SimpleMovingAverage::new(Duration::from_secs(15 * 60)).unwrap(); // 15 minutes
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 9, 30, 0).unwrap();
 
@@ -42,20 +43,20 @@ fn test_intraday_replacement_within_bucket() {
     assert_eq!(result1, 100.0);
 
     // Second 5-minute bar (different bucket)
-    let result2 = sma.next((base_time + Duration::minutes(5), 101.0));
+    let result2 = sma.next((base_time + chrono::Duration::minutes(5), 101.0));
     assert_eq!(result2, 100.5); // Average of 100 and 101
 
     // Third 5-minute bar (different bucket)
-    let result3 = sma.next((base_time + Duration::minutes(10), 102.0));
+    let result3 = sma.next((base_time + chrono::Duration::minutes(10), 102.0));
     assert_eq!(result3, 101.0); // Average of 100, 101, 102
 
     // Update at minute 11 - with 5-minute bucket detection, this is a new bucket
     // so it won't replace
-    let result4 = sma.next((base_time + Duration::minutes(11), 103.0));
+    let result4 = sma.next((base_time + chrono::Duration::minutes(11), 103.0));
     assert_eq!(result4, 101.5); // Average of 100, 101, 102, 103
 
     // Move to next bucket (minute 15)
-    let result5 = sma.next((base_time + Duration::minutes(15), 104.0));
+    let result5 = sma.next((base_time + chrono::Duration::minutes(15), 104.0));
     // With 15-minute window, the first value (100) should drop off
     // Window now has: 101, 102, 103, 104 (values from minutes 5, 10, 11, 15)
     assert_eq!(result5, 102.5); // Average of 101, 102, 103, 104
@@ -64,23 +65,23 @@ fn test_intraday_replacement_within_bucket() {
 #[test]
 fn test_standard_deviation_with_replacement() {
     // Test StandardDeviation with adaptive replacement
-    let mut sd = StandardDeviation::new(Duration::hours(1)).unwrap();
+    let mut sd = StandardDeviation::new(Duration::from_secs(3600)).unwrap(); // 1 hour
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
 
     // Add values at 1-minute intervals (will be detected as intraday)
     sd.next((base_time, 10.0));
-    sd.next((base_time + Duration::minutes(1), 12.0));
-    sd.next((base_time + Duration::minutes(2), 11.0));
+    sd.next((base_time + chrono::Duration::minutes(1), 12.0));
+    sd.next((base_time + chrono::Duration::minutes(2), 11.0));
 
     // Update within the same minute bucket - should replace
     let result1 = sd.next((
-        base_time + Duration::minutes(2) + Duration::seconds(30),
+        base_time + chrono::Duration::minutes(2) + chrono::Duration::seconds(30),
         11.5,
     ));
 
     // Add another value in a new minute
-    let result2 = sd.next((base_time + Duration::minutes(3), 10.5));
+    let result2 = sd.next((base_time + chrono::Duration::minutes(3), 10.5));
 
     // The standard deviation should be calculated with the replaced value
     assert!(result2 > 0.0); // Should have some variance
@@ -89,7 +90,7 @@ fn test_standard_deviation_with_replacement() {
 #[test]
 fn test_transition_from_warmup_to_live() {
     // Simulate warming up with daily data then transitioning to intraday
-    let mut sma = SimpleMovingAverage::new(Duration::days(2)).unwrap();
+    let mut sma = SimpleMovingAverage::new(Duration::from_secs(2 * 86400)).unwrap(); // 2 days
 
     // Warmup with daily OHLC (>4 hours apart)
     let day1_open = Utc.with_ymd_and_hms(2024, 1, 1, 9, 30, 0).unwrap();
@@ -113,18 +114,18 @@ fn test_transition_from_warmup_to_live() {
 #[test]
 fn test_high_frequency_tick_data() {
     // Test with very high frequency data (sub-second)
-    let mut sma = SimpleMovingAverage::new(Duration::seconds(5)).unwrap();
+    let mut sma = SimpleMovingAverage::new(Duration::from_secs(5)).unwrap(); // 5 seconds
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
 
     // Add tick data at sub-second intervals
     // These should be detected as high-frequency and each treated as unique
     sma.next((base_time, 100.0));
-    sma.next((base_time + Duration::milliseconds(100), 100.1));
-    sma.next((base_time + Duration::milliseconds(200), 100.2));
-    sma.next((base_time + Duration::milliseconds(300), 100.3));
+    sma.next((base_time + chrono::Duration::milliseconds(100), 100.1));
+    sma.next((base_time + chrono::Duration::milliseconds(200), 100.2));
+    sma.next((base_time + chrono::Duration::milliseconds(300), 100.3));
 
-    let result = sma.next((base_time + Duration::milliseconds(400), 100.4));
+    let result = sma.next((base_time + chrono::Duration::milliseconds(400), 100.4));
     // With sub-second intervals (<30 seconds apart), detector treats as 1-second buckets
     // First 3 samples are kept while detecting frequency
     // After detection, replacements start within same second bucket
@@ -139,7 +140,7 @@ fn test_high_frequency_tick_data() {
 #[test]
 fn test_minute_bar_replacement() {
     // Test replacement within minute bars
-    let mut sma = SimpleMovingAverage::new(Duration::minutes(5)).unwrap();
+    let mut sma = SimpleMovingAverage::new(Duration::from_secs(5 * 60)).unwrap(); // 5 minutes
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
 
@@ -147,13 +148,13 @@ fn test_minute_bar_replacement() {
     sma.next((base_time, 100.0));
 
     // Update within the same minute (should replace if detected as 1-minute buckets)
-    let result1 = sma.next((base_time + Duration::seconds(30), 100.5));
+    let result1 = sma.next((base_time + chrono::Duration::seconds(30), 100.5));
 
     // Second minute
-    let result2 = sma.next((base_time + Duration::minutes(1), 101.0));
+    let result2 = sma.next((base_time + chrono::Duration::minutes(1), 101.0));
 
     // Third minute
-    let result3 = sma.next((base_time + Duration::minutes(2), 102.0));
+    let result3 = sma.next((base_time + chrono::Duration::minutes(2), 102.0));
 
     // The exact results depend on how the detector interprets the pattern
     // But we should have at most 3 values in the window
@@ -163,7 +164,7 @@ fn test_minute_bar_replacement() {
 #[test]
 fn test_weekly_data_detection() {
     // Test with weekly data (very long intervals)
-    let mut sma = SimpleMovingAverage::new(Duration::days(21)).unwrap(); // 3 weeks
+    let mut sma = SimpleMovingAverage::new(Duration::from_secs(21 * 86400)).unwrap(); // 3 weeks (21 days)
 
     let week1 = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
     let week2 = Utc.with_ymd_and_hms(2024, 1, 8, 0, 0, 0).unwrap();

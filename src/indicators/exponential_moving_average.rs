@@ -1,8 +1,9 @@
 use std::fmt;
+use std::time::Duration; // Change: Use std::time::Duration
 
 use crate::errors::{Result, TaError};
 use crate::{Next, Reset};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -11,13 +12,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct ExponentialMovingAverage {
     period: usize,
-    period_duration: Duration, // The actual time duration this EMA represents
-    k: f64,                    // Base smoothing constant for one period
+    period_duration: Duration, // Now std::time::Duration
+    k: f64,
     current: f64,
     is_new: bool,
     last_value: f64,
     last_timestamp: Option<DateTime<Utc>>,
-    last_adjusted_k: f64, // Store the last adjusted k for replacement calculations
+    last_adjusted_k: f64,
 }
 
 impl ExponentialMovingAverage {
@@ -30,10 +31,10 @@ impl ExponentialMovingAverage {
     /// # Example
     /// ```
     /// // 14-day EMA that can handle any frequency data
-    /// let ema = ExponentialMovingAverage::new(14, Duration::days(1))?;
+    /// let ema = ExponentialMovingAverage::new(14, Duration::from_secs(86400))?;
     /// ```
     pub fn new(period: usize, period_duration: Duration) -> Result<Self> {
-        if period == 0 || period_duration.num_seconds() <= 0 {
+        if period == 0 || (period_duration.as_secs() == 0 && period_duration.subsec_nanos() == 0) {
             Err(TaError::InvalidParameter)
         } else {
             Ok(Self {
@@ -53,7 +54,7 @@ impl ExponentialMovingAverage {
     /// This is for backward compatibility
     pub fn new_period_based(period: usize) -> Result<Self> {
         // Default to daily periods for backward compatibility
-        Self::new(period, Duration::days(1))
+        Self::new(period, Duration::from_secs(86400)) // 1 day in seconds
     }
 
     /// Calculate the adjusted smoothing constant based on actual time elapsed
@@ -68,7 +69,7 @@ impl ExponentialMovingAverage {
 
             // Calculate how many periods have elapsed
             let periods_elapsed =
-                time_elapsed.num_seconds() as f64 / self.period_duration.num_seconds() as f64;
+                time_elapsed.num_seconds() as f64 / self.period_duration.as_secs() as f64;
 
             // Adjust k using the formula: adjusted_k = 1 - (1 - k)^periods_elapsed
             // This ensures proper exponential decay regardless of time interval
@@ -157,40 +158,21 @@ impl Reset for ExponentialMovingAverage {
 impl Default for ExponentialMovingAverage {
     fn default() -> Self {
         // 14-day EMA by default
-        Self::new(14, Duration::days(1)).unwrap()
+        Self::new(14, Duration::from_secs(14 * 86400)).unwrap()
     }
 }
 
 impl fmt::Display for ExponentialMovingAverage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.period_duration.num_days() > 0 {
-            write!(
-                f,
-                "EMA({} x {} days)",
-                self.period,
-                self.period_duration.num_days()
-            )
-        } else if self.period_duration.num_hours() > 0 {
-            write!(
-                f,
-                "EMA({} x {} hours)",
-                self.period,
-                self.period_duration.num_hours()
-            )
-        } else if self.period_duration.num_minutes() > 0 {
-            write!(
-                f,
-                "EMA({} x {} min)",
-                self.period,
-                self.period_duration.num_minutes()
-            )
+        let secs = self.period_duration.as_secs();
+        if secs >= 86400 && secs % 86400 == 0 {
+            write!(f, "EMA({} x {} days)", self.period, secs / 86400)
+        } else if secs >= 3600 && secs % 3600 == 0 {
+            write!(f, "EMA({} x {} hours)", self.period, secs / 3600)
+        } else if secs >= 60 && secs % 60 == 0 {
+            write!(f, "EMA({} x {} min)", self.period, secs / 60)
         } else {
-            write!(
-                f,
-                "EMA({} x {} sec)",
-                self.period,
-                self.period_duration.num_seconds()
-            )
+            write!(f, "EMA({} x {} sec)", self.period, secs)
         }
     }
 }
@@ -198,20 +180,20 @@ impl fmt::Display for ExponentialMovingAverage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
 
     #[test]
     fn test_new() {
-        assert!(ExponentialMovingAverage::new(0, Duration::days(1)).is_err());
-        assert!(ExponentialMovingAverage::new(1, Duration::days(0)).is_err());
-        assert!(ExponentialMovingAverage::new(1, Duration::days(1)).is_ok());
-        assert!(ExponentialMovingAverage::new(14, Duration::hours(1)).is_ok());
+        assert!(ExponentialMovingAverage::new(0, Duration::from_secs(86400)).is_err());
+        assert!(ExponentialMovingAverage::new(1, Duration::from_secs(0)).is_err());
+        assert!(ExponentialMovingAverage::new(1, Duration::from_secs(86400)).is_ok());
+        assert!(ExponentialMovingAverage::new(14, Duration::from_secs(3600)).is_ok());
     }
 
     #[test]
     fn test_time_weighted_daily() {
         // 3-period daily EMA
-        let mut ema = ExponentialMovingAverage::new(3, Duration::days(1)).unwrap();
+        let mut ema = ExponentialMovingAverage::new(3, Duration::from_secs(86400)).unwrap();
         let now = Utc::now();
 
         // First value initializes
@@ -219,29 +201,32 @@ mod tests {
 
         // One day later: full period weight
         // k = 0.5, so: 0.5 * 5.0 + 0.5 * 2.0 = 3.5
-        assert_eq!(ema.next((now + Duration::days(1), 5.0)), 3.5);
+        assert_eq!(ema.next((now + chrono::Duration::days(1), 5.0)), 3.5);
 
         // One more day: another full period
         // 0.5 * 1.0 + 0.5 * 3.5 = 2.25
-        assert_eq!(ema.next((now + Duration::days(2), 1.0)), 2.25);
+        assert_eq!(ema.next((now + chrono::Duration::days(2), 1.0)), 2.25);
     }
 
     #[test]
     fn test_time_weighted_mixed_frequency() {
         // 3-period daily EMA, but we'll feed it mixed frequency data
-        let mut ema = ExponentialMovingAverage::new(3, Duration::days(1)).unwrap();
+        let mut ema = ExponentialMovingAverage::new(3, Duration::from_secs(86400)).unwrap();
         let now = Utc::now();
 
         // Initialize with daily data
         assert_eq!(ema.next((now, 100.0)), 100.0);
 
         // One day later: k=0.5, so 0.5*110 + 0.5*100 = 105
-        let day1_value = ema.next((now + Duration::days(1), 110.0));
+        let day1_value = ema.next((now + chrono::Duration::days(1), 110.0));
         assert_eq!(day1_value, 105.0);
 
         // Now switch to hourly data (1/24 of a period)
         // The weight should be much smaller
-        let hourly_value = ema.next((now + Duration::days(1) + Duration::hours(1), 120.0));
+        let hourly_value = ema.next((
+            now + chrono::Duration::days(1) + chrono::Duration::hours(1),
+            120.0,
+        ));
 
         // After just 1 hour, the EMA shouldn't change much
         // hourly k = 1 - (1-0.5)^(1/24) ≈ 0.0283
@@ -251,7 +236,10 @@ mod tests {
         // Feed 23 more hours of 120.0
         let mut current = hourly_value;
         for i in 2..=24 {
-            current = ema.next((now + Duration::days(1) + Duration::hours(i), 120.0));
+            current = ema.next((
+                now + chrono::Duration::days(1) + chrono::Duration::hours(i),
+                120.0,
+            ));
         }
 
         // After 24 hours of 120.0, the compounded effect should be close to one daily update
@@ -262,7 +250,7 @@ mod tests {
     #[test]
     fn test_minute_data_on_daily_ema() {
         // 14-day EMA receiving minute data
-        let mut ema = ExponentialMovingAverage::new(14, Duration::days(1)).unwrap();
+        let mut ema = ExponentialMovingAverage::new(14, Duration::from_secs(14 * 86400)).unwrap();
         let now = Utc::now();
 
         // Initialize
@@ -270,7 +258,7 @@ mod tests {
 
         // Feed minute data for an hour with increasing values
         for i in 1..=60 {
-            ema.next((now + Duration::minutes(i), 100.0 + i as f64));
+            ema.next((now + chrono::Duration::minutes(i), 100.0 + i as f64));
         }
 
         let after_hour = ema.current;
@@ -282,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_no_time_change() {
-        let mut ema = ExponentialMovingAverage::new(5, Duration::minutes(5)).unwrap();
+        let mut ema = ExponentialMovingAverage::new(5, Duration::from_secs(5 * 60)).unwrap();
         let base_time = Utc.ymd(2024, 1, 1).and_hms(0, 0, 0);
 
         // Initialize
@@ -290,7 +278,7 @@ mod tests {
         assert_eq!(v0, 100.0);
 
         // Move forward exactly 5 minutes (one period)
-        let time1 = base_time + Duration::minutes(5);
+        let time1 = base_time + chrono::Duration::minutes(5);
         let v1 = ema.next((time1, 110.0));
 
         // Now feed the EXACT same timestamp again with a different value
@@ -308,11 +296,11 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let mut ema = ExponentialMovingAverage::new(5, Duration::days(1)).unwrap();
+        let mut ema = ExponentialMovingAverage::new(5, Duration::from_secs(86400)).unwrap();
         let now = Utc::now();
 
         assert_eq!(ema.next((now, 4.0)), 4.0);
-        ema.next((now + Duration::days(1), 10.0));
+        ema.next((now + chrono::Duration::days(1), 10.0));
 
         ema.reset();
         assert_eq!(ema.next((now, 4.0)), 4.0);
@@ -321,13 +309,13 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let ema1 = ExponentialMovingAverage::new(14, Duration::days(1)).unwrap();
+        let ema1 = ExponentialMovingAverage::new(14, Duration::from_secs(86400)).unwrap();
         assert_eq!(format!("{}", ema1), "EMA(14 x 1 days)");
 
-        let ema2 = ExponentialMovingAverage::new(20, Duration::hours(4)).unwrap();
+        let ema2 = ExponentialMovingAverage::new(20, Duration::from_secs(4 * 3600)).unwrap();
         assert_eq!(format!("{}", ema2), "EMA(20 x 4 hours)");
 
-        let ema3 = ExponentialMovingAverage::new(50, Duration::minutes(5)).unwrap();
+        let ema3 = ExponentialMovingAverage::new(50, Duration::from_secs(5 * 60)).unwrap();
         assert_eq!(format!("{}", ema3), "EMA(50 x 5 min)");
     }
 }

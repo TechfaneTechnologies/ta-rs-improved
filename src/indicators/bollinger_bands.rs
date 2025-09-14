@@ -1,6 +1,7 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
 use std::fmt;
+use std::time::Duration; // Change: Use std::time::Duration
 
 use crate::errors::Result;
 use crate::indicators::{AdaptiveTimeDetector, StandardDeviation as Sd};
@@ -12,10 +13,10 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct BollingerBands {
-    duration: Duration,
+    duration: Duration, // Now std::time::Duration
     multiplier: f64,
     sd: Sd,
-    window: VecDeque<(DateTime<Utc>, f64)>, // Store tuples of (timestamp, value)
+    window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
 }
 
@@ -27,17 +28,19 @@ pub struct BollingerBandsOutput {
 }
 
 impl BollingerBands {
-     pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
+    pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
         self.window.clone()
     }
-pub fn new(duration: Duration, multiplier: f64) -> Result<Self> {
-        if duration.num_seconds() <= 0 {
+
+    pub fn new(duration: Duration, multiplier: f64) -> Result<Self> {
+        // Change: Check for zero duration (std::time::Duration can't be negative)
+        if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
             return Err(crate::errors::TaError::InvalidParameter);
         }
         Ok(Self {
             duration,
             multiplier,
-            sd: Sd::new(duration)?, // We will manage the period dynamically
+            sd: Sd::new(duration)?, // Pass std::time::Duration
             window: VecDeque::new(),
             detector: AdaptiveTimeDetector::new(),
         })
@@ -48,10 +51,12 @@ pub fn new(duration: Duration, multiplier: f64) -> Result<Self> {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
+        // Change: Convert std::time::Duration to chrono::Duration for date arithmetic
+        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
             .front()
-            .map_or(false, |(time, _)| *time <= current_time - self.duration)
+            .map_or(false, |(time, _)| *time <= current_time - chrono_duration)
         {
             self.window.pop_front();
         }
@@ -64,7 +69,7 @@ impl Next<f64> for BollingerBands {
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
-        
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             self.window.pop_back();
@@ -94,13 +99,15 @@ impl Reset for BollingerBands {
 
 impl Default for BollingerBands {
     fn default() -> Self {
-        Self::new(Duration::days(14), 2_f64).unwrap()
+        // Change: Use Duration::from_secs for 14 days
+        Self::new(Duration::from_secs(14 * 24 * 60 * 60), 2_f64).unwrap()
     }
 }
 
 impl fmt::Display for BollingerBands {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "BB({}, {})", self.duration, self.multiplier)
+        // Change: Display duration in seconds
+        write!(f, "BB({}s, {})", self.duration.as_secs(), self.multiplier)
     }
 }
 
@@ -108,26 +115,29 @@ impl fmt::Display for BollingerBands {
 mod tests {
     use super::*;
     use crate::test_helper::*;
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
 
     test_indicator!(BollingerBands);
 
     #[test]
     fn test_new() {
-        assert!(BollingerBands::new(Duration::days(0), 2_f64).is_err());
-        assert!(BollingerBands::new(Duration::days(1), 2_f64).is_ok());
-        assert!(BollingerBands::new(Duration::days(2), 2_f64).is_ok());
+        // Change: Use std::time::Duration constructors
+        assert!(BollingerBands::new(Duration::from_secs(0), 2_f64).is_err());
+        assert!(BollingerBands::new(Duration::from_secs(86400), 2_f64).is_ok()); // 1 day
+        assert!(BollingerBands::new(Duration::from_secs(172800), 2_f64).is_ok());
+        // 2 days
     }
 
     #[test]
     fn test_next() {
-        let mut bb = BollingerBands::new(Duration::days(3), 2.0).unwrap();
+        let mut bb = BollingerBands::new(Duration::from_secs(3 * 86400), 2.0).unwrap(); // 3 days
         let now = Utc::now();
 
+        // Use chrono::Duration for date arithmetic
         let a = bb.next((now, 2.0));
-        let b = bb.next((now + Duration::days(1), 5.0));
-        let c = bb.next((now + Duration::days(2), 1.0));
-        let d = bb.next((now + Duration::days(3), 6.25));
+        let b = bb.next((now + chrono::Duration::days(1), 5.0));
+        let c = bb.next((now + chrono::Duration::days(2), 1.0));
+        let d = bb.next((now + chrono::Duration::days(3), 6.25));
 
         assert_eq!(round(a), 2.0);
         assert_eq!(round(b), 6.5);
@@ -137,18 +147,18 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let mut bb = BollingerBands::new(Duration::days(5), 2.0_f64).unwrap();
+        let mut bb = BollingerBands::new(Duration::from_secs(5 * 86400), 2.0_f64).unwrap(); // 5 days
         let now = Utc::now();
 
         let out = bb.next((now, 3.0));
 
         assert_eq!(out, 3.0);
 
-        bb.next((now + Duration::days(1), 2.5));
-        bb.next((now + Duration::days(2), 3.5));
-        bb.next((now + Duration::days(3), 4.0));
+        bb.next((now + chrono::Duration::days(1), 2.5));
+        bb.next((now + chrono::Duration::days(2), 3.5));
+        bb.next((now + chrono::Duration::days(3), 4.0));
 
-        let out = bb.next((now + Duration::days(4), 2.0));
+        let out = bb.next((now + chrono::Duration::days(4), 2.0));
 
         assert_eq!(round(out), 4.414);
 
@@ -164,8 +174,8 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let duration = Duration::days(10);
+        let duration = Duration::from_secs(10 * 86400); // 10 days
         let bb = BollingerBands::new(duration, 3.0_f64).unwrap();
-        assert_eq!(format!("{}", bb), format!("BB({}, 3)", duration));
+        assert_eq!(format!("{}", bb), format!("BB({}s, 3)", 10 * 86400));
     }
 }
