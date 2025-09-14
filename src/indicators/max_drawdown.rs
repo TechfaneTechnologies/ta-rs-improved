@@ -17,6 +17,9 @@ pub struct MaxDrawdown {
 }
 
 impl MaxDrawdown {
+    pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
+        self.window.clone()
+    }
     pub fn new(duration: Duration) -> Result<Self> {
         if duration.num_seconds() <= 0 {
             Err(TaError::InvalidParameter)
@@ -63,7 +66,7 @@ impl Next<f64> for MaxDrawdown {
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
-        
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             self.window.pop_back();

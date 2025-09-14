@@ -20,7 +20,10 @@ pub struct StandardDeviation {
 }
 
 impl StandardDeviation {
-    pub fn new(duration: Duration) -> Result<Self> {
+     pub fn get_window(&self) -> VecDeque<(DateTime<Utc>, f64)> {
+        self.window.clone()
+    }
+pub fn new(duration: Duration) -> Result<Self> {
         if duration.num_seconds() <= 0 {
             return Err(crate::errors::TaError::InvalidParameter);
         }
