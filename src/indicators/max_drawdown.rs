@@ -29,7 +29,7 @@ impl MaxDrawdown {
             Ok(Self {
                 duration,
                 window: VecDeque::new(),
-                detector: AdaptiveTimeDetector::new(),
+                detector: AdaptiveTimeDetector::new(duration),
             })
         }
     }
@@ -67,12 +67,14 @@ impl Next<f64> for MaxDrawdown {
     type Output = f64;
 
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
-        // No changes needed here
+        // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
+
+        // ALWAYS remove old data first, regardless of replace/add
+        self.remove_old_data(timestamp);
+
         if should_replace && !self.window.is_empty() {
             self.window.pop_back();
-        } else {
-            self.remove_old_data(timestamp);
         }
         self.window.push_back((timestamp, value));
         self.calculate_max_drawdown()

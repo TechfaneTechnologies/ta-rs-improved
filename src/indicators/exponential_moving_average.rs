@@ -36,7 +36,7 @@ impl ExponentialMovingAverage {
                 window: VecDeque::new(),
                 current: 0.0,
                 is_new: true,
-                detector: AdaptiveTimeDetector::new(),
+                detector: AdaptiveTimeDetector::new(duration),
                 last_value: 0.0,
             })
         }

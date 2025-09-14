@@ -30,7 +30,7 @@ impl RateOfChange {
             Ok(Self {
                 duration,
                 window: VecDeque::new(),
-                detector: AdaptiveTimeDetector::new(),
+                detector: AdaptiveTimeDetector::new(duration),
             })
         }
     }
@@ -56,12 +56,12 @@ impl Next<f64> for RateOfChange {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
 
+        // ALWAYS remove old data first, regardless of replace/add
+        self.remove_old_data(timestamp);
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             self.window.pop_back();
-        } else {
-            // New time period - remove old data first
-            self.remove_old_data(timestamp);
         }
 
         // Add the new data point

@@ -34,7 +34,7 @@ impl StandardDeviation {
             window: VecDeque::new(),
             sum: 0.0,
             sum_sq: 0.0,
-            detector: AdaptiveTimeDetector::new(),
+            detector: AdaptiveTimeDetector::new(duration),
         })
     }
 
@@ -72,15 +72,15 @@ impl Next<f64> for StandardDeviation {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
 
+        // ALWAYS remove old data first, regardless of replace/add
+        self.remove_old_data(timestamp);
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             if let Some((_, old_value)) = self.window.pop_back() {
                 self.sum -= old_value;
                 self.sum_sq -= old_value * old_value;
             }
-        } else {
-            // New time period - remove old data first
-            self.remove_old_data(timestamp);
         }
 
         // Add new value to the window

@@ -88,6 +88,7 @@ fn test_standard_deviation_with_replacement() {
 }
 
 #[test]
+#[test]
 fn test_transition_from_warmup_to_live() {
     // Simulate warming up with daily data then transitioning to intraday
     let mut sma = SimpleMovingAverage::new(Duration::from_secs(2 * 86400)).unwrap(); // 2 days
@@ -104,11 +105,12 @@ fn test_transition_from_warmup_to_live() {
     assert_eq!(warmup_result, 102.0); // Average of 100, 102, 104
 
     // Now continue with more frequent updates on day 2
-    // The detector has already determined this is DailyOHLC, so it won't replace
+    // With DailyOHLC and 3.4-hour gap logic, this WILL replace day2_open
+    // since 30 minutes < 3.4 hours
     let day2_mid = Utc.with_ymd_and_hms(2024, 1, 2, 10, 0, 0).unwrap();
     let result = sma.next((day2_mid, 105.0));
-    // Should add as new value, not replace
-    assert_eq!(result, 102.75); // Average of 100, 102, 104, 105
+    // Should replace day2_open (104) with 105
+    assert_eq!(result, (100.0 + 102.0 + 105.0) / 3.0); // Average of 100, 102, 105
 }
 
 #[test]
@@ -126,15 +128,10 @@ fn test_high_frequency_tick_data() {
     sma.next((base_time + chrono::Duration::milliseconds(300), 100.3));
 
     let result = sma.next((base_time + chrono::Duration::milliseconds(400), 100.4));
-    // With sub-second intervals (<30 seconds apart), detector treats as 1-second buckets
-    // First 3 samples are kept while detecting frequency
-    // After detection, replacements start within same second bucket
-    // Window has: 100.0, 100.1, 100.2 (first 3), then 100.3 replaces 100.2, then 100.4 replaces 100.3
-    // Final window: 100.0, 100.1, 100.4
-    // But with 5-second window and millisecond updates, some values stay
-    // Actual result shows (100.0 + 100.1 + 100.2 + 100.3 + 100.4) / 5 = 100.2 isn't matching
-    // The actual average is 100.175, which is (100.0 + 100.1 + 100.2 + 100.4) / 4
-    assert!((result - 100.175).abs() < 0.0001); // Average after adaptive replacement (with floating point tolerance)
+    // With a 5-second duration (< 5 minutes), we use second-level bucketing
+    // All millisecond updates within the same second get replaced
+    // So we only have the last value: 100.4
+    assert_eq!(result, 100.4); // Only one value in the window after replacements
 }
 
 #[test]

@@ -32,7 +32,7 @@ impl MeanAbsoluteDeviation {
                 duration,
                 sum: 0.0,
                 window: VecDeque::new(),
-                detector: AdaptiveTimeDetector::new(),
+                detector: AdaptiveTimeDetector::new(duration),
             })
         }
     }
@@ -59,14 +59,14 @@ impl Next<f64> for MeanAbsoluteDeviation {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
 
+        // ALWAYS remove old data first, regardless of replace/add
+        self.remove_old_data(timestamp);
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             if let Some((_, old_value)) = self.window.pop_back() {
                 self.sum -= old_value;
             }
-        } else {
-            // New time period - remove old data first
-            self.remove_old_data(timestamp);
         }
 
         self.window.push_back((timestamp, value));

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct SimpleMovingAverage {
-    duration: Duration,  // Now std::time::Duration
+    duration: Duration, // Now std::time::Duration
     window: VecDeque<(DateTime<Utc>, f64)>,
     sum: f64,
     detector: AdaptiveTimeDetector,
@@ -32,7 +32,7 @@ impl SimpleMovingAverage {
             duration,
             window: VecDeque::new(),
             sum: 0.0,
-            detector: AdaptiveTimeDetector::new(),
+            detector: AdaptiveTimeDetector::new(duration),
         })
     }
 
@@ -62,14 +62,14 @@ impl Next<f64> for SimpleMovingAverage {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
 
+        // ALWAYS remove old data first, regardless of replace/add
+        self.remove_old_data(timestamp);
+
         if should_replace && !self.window.is_empty() {
             // Replace the last value in the same time bucket
             if let Some((_, old_value)) = self.window.pop_back() {
                 self.sum -= old_value;
             }
-        } else {
-            // New time period - remove old data first
-            self.remove_old_data(timestamp);
         }
 
         // Add new data point
@@ -96,7 +96,7 @@ impl Reset for SimpleMovingAverage {
 impl Default for SimpleMovingAverage {
     fn default() -> Self {
         // Use std::time::Duration constructor
-        Self::new(Duration::from_secs(14 * 24 * 60 * 60)).unwrap()  // 14 days in seconds
+        Self::new(Duration::from_secs(14 * 24 * 60 * 60)).unwrap() // 14 days in seconds
     }
 }
 

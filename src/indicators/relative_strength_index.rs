@@ -30,7 +30,7 @@ impl RelativeStrengthIndex {
             down_ema_indicator: Ema::new(duration)?,
             window: VecDeque::new(),
             prev_val: None,
-            detector: AdaptiveTimeDetector::new(),
+            detector: AdaptiveTimeDetector::new(duration),
         })
     }
 
@@ -54,15 +54,15 @@ impl Next<f64> for RelativeStrengthIndex {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
 
+        // ALWAYS remove old data first, regardless of replace/add
+        self.remove_old_data(timestamp);
+
         if should_replace && !self.window.is_empty() {
             // For RSI, when replacing a value in the same time bucket,
             // we don't change prev_val since it represents the previous period's close
             // Just remove the last window entry to be replaced
             self.window.pop_back();
         } else {
-            // New time period - remove old data first
-            self.remove_old_data(timestamp);
-
             // Update prev_val to the last complete period's value
             // This is crucial: prev_val should be the closing value of the previous period
             if !self.window.is_empty() {

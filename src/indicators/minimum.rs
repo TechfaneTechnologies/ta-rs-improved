@@ -32,7 +32,7 @@ impl Minimum {
             duration,
             window: VecDeque::new(),
             min_value: f64::INFINITY,
-            detector: AdaptiveTimeDetector::new(),
+            detector: AdaptiveTimeDetector::new(duration),
         })
     }
 
