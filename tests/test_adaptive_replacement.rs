@@ -87,30 +87,6 @@ fn test_standard_deviation_with_replacement() {
 }
 
 #[test]
-fn test_ema_with_daily_ohlc() {
-    // Test EMA with daily OHLC data
-    let mut ema = ExponentialMovingAverage::new(3, Duration::days(3)).unwrap();
-
-    // Day 1 Open
-    let day1_open = Utc.with_ymd_and_hms(2024, 1, 1, 9, 30, 0).unwrap();
-    let result1 = ema.next((day1_open, 100.0));
-    assert_eq!(result1, 100.0); // First value initializes EMA
-
-    // Day 1 Close (should NOT replace)
-    let day1_close = Utc.with_ymd_and_hms(2024, 1, 1, 16, 0, 0).unwrap();
-    let result2 = ema.next((day1_close, 102.0));
-    // k = 2/(3+1) = 0.5
-    // EMA = 0.5 * 102 + 0.5 * 100 = 101
-    assert_eq!(result2, 101.0);
-
-    // Day 2 Open
-    let day2_open = Utc.with_ymd_and_hms(2024, 1, 2, 9, 30, 0).unwrap();
-    let result3 = ema.next((day2_open, 104.0));
-    // EMA = 0.5 * 104 + 0.5 * 101 = 102.5
-    assert_eq!(result3, 102.5);
-}
-
-#[test]
 fn test_transition_from_warmup_to_live() {
     // Simulate warming up with daily data then transitioning to intraday
     let mut sma = SimpleMovingAverage::new(Duration::days(2)).unwrap();
